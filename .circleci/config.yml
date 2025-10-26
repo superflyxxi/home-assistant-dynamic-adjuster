@@ -1,0 +1,323 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@7
+  docker: circleci/docker@2
+  sonarcloud: sonarsource/sonarcloud@2
+  snyk: snyk/snyk@2
+
+anchors:
+  node-executor: &node-executor
+    name: node/default
+    tag: '22.21.0'
+
+commands:
+  export-primary-docker-tag:
+    # Assuming /tmp/workspace as the files required
+    steps:
+      - run:
+          name: Determine docker tag
+          command: |
+            echo "export PRIMARY_DOCKER_TAG=$(cat /tmp/workspace/short_version.txt | sed 's#/#-#g')" >> ${BASH_ENV}
+  install-ssh-dependencies:
+    steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "SHA256:K1kowcyvmG5stCZAjRqwJCtFpJ+dpBIDP/sks1erWvk"
+            - "SHA256:sAaBX0MwaNoPzbM9YwyWwwQQlKKK+8Ljb+kTzuPU2to"
+      - run:
+          name: Configure Known Hosts
+          #command: "echo ${SSH_KNOWN_HOSTS} >> ~/.ssh/known_hosts"
+          command: |
+            ssh-keyscan -p ${SSH_PORT} ${SSH_SERVER} >> ~/.ssh/known_hosts
+            cat ~/.ssh/known_hosts
+
+jobs:
+  unit-test:
+    executor: *node-executor 
+    resource_class: small
+    steps:
+      - checkout
+      - node/install-packages:
+          override-ci-command: npm install --include=dev
+          include-branch-in-cache-key: false
+      - run:
+          name: Unit Tests
+          command: npm test -- --forbid-pending --forbid-only --reporter mocha-junit-reporter
+          environment:
+            MOCHA_FILE: ./mocha/test-results.xml
+      - run:
+          name: Tar coverage
+          command: tar -jvcf coverage.tar.bz2 coverage/
+      - store_test_results:
+          path: ./mocha
+      - store_artifacts:
+          path: ./mocha/test-results.xml
+      - store_artifacts:
+          path: ./coverage.tar.bz2
+      - run:
+          name: Verify XO
+          command: npm run xo
+      - sonarcloud/scan
+
+  snyk-scan:
+    resource_class: small
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - setup_remote_docker
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - export-primary-docker-tag
+      - run:
+          name: Load docker images
+          command: |
+            docker load -i /tmp/workspace/images.tar
+      - snyk/scan:
+          docker-image-name: ${CIRCLE_PROJECT_REPONAME}:build
+          fail-on-issues: false
+
+  build-docker:
+    resource_class: small
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+          - setup_remote_docker:
+              docker_layer_caching: false
+      - unless:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+          - setup_remote_docker:
+              docker_layer_caching: true
+      - run:
+          name: Define cache env variables
+          command: |
+            echo "export CACHE_REGISTRY=${GHCR_REGISTRY}" >> ${BASH_ENV}
+            echo "export CACHE_USERNAME=${GHCR_USERNAME}" >> ${BASH_ENV}
+            echo "export CACHE_PASSWORD=${GHCR_TOKEN}" >> ${BASH_ENV}
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run: 
+          name: Determine version.txt
+          command: |
+            cp -v /tmp/workspace/full_version.txt ./src/version.txt
+      - export-primary-docker-tag
+      - run:
+          name: Custom enviroment variables
+          command: |
+            export CACHE_FROM_IMAGES=$(grep "^FROM " Dockerfile | sed 's/FROM //g')
+            if [[ "<< pipeline.git.branch >>" != "main" ]]; then
+              export CACHE_FROM_IMAGES="${CACHE_FROM_IMAGES},${CACHE_REGISTRY}/${CACHE_USERNAME}/${CIRCLE_PROJECT_REPONAME}:latest"
+            fi
+
+            if [[ "main" == "<< pipeline.git.branch >>" ]] && [[ "main" != "${PRIMARY_DOCKER_TAG}" ]]; then
+              NOW=${PRIMARY_DOCKER_TAG:0:1}
+              echo "Handling TAG=${PRIMARY_DOCKER_TAG}"
+              for A in $(echo ${PRIMARY_DOCKER_TAG:1} | tr "." "\n"); do 
+                echo "Dealing with ${NOW}; ${PREV}"
+                export CACHE_FROM_IMAGES="${CACHE_FROM_IMAGES},${CACHE_REGISTRY}/${CACHE_USERNAME}/${CIRCLE_PROJECT_REPONAME}:${NOW}"
+                PREV=$NOW
+                NOW="$NOW.$A"
+              done
+            fi
+            echo "export CACHE_FROM_IMAGES=${CACHE_FROM_IMAGES}" >> ${BASH_ENV}
+            cat ${BASH_ENV}
+      - docker/check:
+          registry: ${CACHE_REGISTRY}
+          docker-username: CACHE_USERNAME
+          docker-password: CACHE_PASSWORD
+      - run:
+          name: Docker pull cache images
+          command: |
+            for I in $(echo ${CACHE_FROM_IMAGES} | tr "," "\n"); do
+              echo "Pulling $I"
+              docker pull $I
+            done
+      - docker/build:
+          step-name: Build application docker image
+          image: ${CIRCLE_PROJECT_REPONAME}
+          tag: build
+          cache_from: ${CACHE_FROM_IMAGES}
+      - run:
+          name: Save docker image
+          command: docker save -o images.tar ${CIRCLE_PROJECT_REPONAME}:build
+      - persist_to_workspace:
+          root: ./
+          paths:
+            - images.tar*
+
+  publish-docker:
+    resource_class: small
+    docker:
+      - image: cimg/base:stable
+    parameters:
+      registry-env:
+        description: The registry envirnment variable to use to publish docker images.
+        type: string
+        default: docker.io
+      docker-username-env:
+        description: The docker registry username env variable to use.
+        type: string
+        default: DOCKER_LOGIN
+      docker-password-env:
+        description: The docker registery password env variable to use.
+        type: string
+        default: DOCKER_PASSWORD
+    steps:
+      - setup_remote_docker
+      - attach_workspace:
+          at: /tmp/workspace
+      - export-primary-docker-tag
+      - run:
+          name: Custom enviroment variables
+          command: |
+            export DOCKER_TAGS=${PRIMARY_DOCKER_TAG}
+            if [[ "main" == "<< pipeline.git.branch >>" ]] && [[ "main" != "${PRIMARY_DOCKER_TAG}" ]]; then
+              for A in $(echo ${PRIMARY_DOCKER_TAG} | tr "." "\n"); do 
+                NOW="$PREV.$A"
+                export DOCKER_TAGS="${DOCKER_TAGS},${NOW:1}"
+                PREV=$NOW
+              done
+              export DOCKER_TAGS="${DOCKER_TAGS},main,latest"
+            fi
+            echo "export DOCKER_TAGS=${DOCKER_TAGS}" >> ${BASH_ENV}
+            echo "export FINAL_IMAGE_NAME=${<< parameters.docker-username-env >>}/${CIRCLE_PROJECT_REPONAME}" >> ${BASH_ENV}
+            cat ${BASH_ENV}
+      - docker/check:
+          registry: ${<< parameters.registry-env >>}
+          docker-password: << parameters.docker-password-env >>
+          docker-username: << parameters.docker-username-env >>
+      - run:
+          name: Load docker images
+          command: |
+            docker load -i /tmp/workspace/images.tar
+      - run:
+          name: Tag docker images for repos
+          command: |
+            IFS="," read -ra LOOP_TAGS \<<< "${DOCKER_TAGS}"
+            set -x
+            for TAG in "${LOOP_TAGS[@]}"; do
+              docker tag ${CIRCLE_PROJECT_REPONAME}:build ${<< parameters.registry-env >>}/${FINAL_IMAGE_NAME}:${TAG}
+            done
+            set +x
+      - docker/push:
+          step-name: Pushing image to desired repo
+          registry: ${<< parameters.registry-env >>}
+          image: ${FINAL_IMAGE_NAME}
+          tag: ${DOCKER_TAGS}
+
+  release-notes:
+    executor: *node-executor 
+    resource_class: small
+    parameters:
+      prerelease:
+        description: Whether it's a pre-release and not actually release.
+        type: boolean
+        default: false
+    steps:
+      - checkout
+      - node/install-packages:
+          override-ci-command: npm install --include=dev
+          include-branch-in-cache-key: false
+      - attach_workspace:
+          at: /tmp/workspace
+      - when:
+          condition: << parameters.prerelease >>
+          steps:
+            run:
+              name: Define additional args
+              command: |
+                echo "export ADDITIONAL_ARGS=--dry-run" >> ${BASH_ENV}
+      - run:
+          name: Run semantic-release
+          command: |
+            npx semantic-release ${ADDITIONAL_ARGS}
+            if [[ "" == "$(cat version.txt)" ]]; then 
+              printf "%s-%s" ${CIRCLE_BRANCH} ${CIRCLE_SHA1:0:7} | sed 's#/#-#g' > /tmp/workspace/full_version.txt
+              printf "${CIRCLE_BRANCH}" | sed 's#/#-#g' > /tmp/workspace/short_version.txt
+            else
+              cp -v version.txt /tmp/workspace/full_version.txt
+              cp -v version.txt /tmp/workspace/short_version.txt
+            fi
+      - persist_to_workspace:
+          root: /tmp/workspace
+          paths:
+            - full_version.txt
+            - short_version.txt
+
+workflows:
+  build:
+    jobs:
+      - docker/hadolint:
+          name: validate-dockerfile
+          context: default
+          dockerfiles: Dockerfile
+          hadolint-tag: v2.12.0-debian
+      - release-notes:
+          name: pre-release
+          context: default
+          prerelease: true
+      - unit-test:
+          context: default
+      - build-docker:
+          context: default
+          requires:
+            - unit-test
+            - pre-release
+            - validate-dockerfile
+      - publish-docker:
+          name: publish-docker-private
+          context: default
+          registry-env: PRIVATE_DOCKER_REGISTRY
+          docker-username-env: PRIVATE_DOCKER_USERNAME
+          docker-password-env: PRIVATE_DOCKER_PASSWORD
+          requires:
+            - build-docker
+      - publish-docker:
+          name: publish-docker-ghcr
+          context: default
+          registry-env: GHCR_REGISTRY
+          docker-username-env: GHCR_USERNAME
+          docker-password-env: GHCR_TOKEN
+          requires:
+            - build-docker
+          filters:
+            branches:
+              only:
+                - main
+      - publish-docker:
+          name: publish-docker-dockerio
+          context: default
+          registry-env: DOCKER_IO_REGISTRY
+          docker-username-env: DOCKER_IO_USERNAME
+          docker-password-env: DOCKER_IO_PASSWORD
+          requires:
+            - build-docker
+          filters:
+            branches:
+              only:
+                - main
+      - snyk-scan:
+          context: default
+          requires:
+            - build-docker
+          filters:
+            branches:
+              ignore:
+                - main
+      - release-notes:
+          prerelease: false
+          context: default
+          requires:
+            - publish-docker-private
+          filters:
+            branches:
+              only:
+                - main
