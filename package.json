@@ -19,6 +19,31 @@
   "homepage": "https://github.com/superflyxxi/home-assistant-dynamic-adjuster#readme",
   "dependencies": {
     "axios": "1",
-    "config": "4"
+    "config": "4",
+    "xo": "^1.2.3"
+  },
+  "xo": {
+    "ignores": [],
+    "prettier": true,
+    "rules": {
+      "unicorn/prevent-abbreviations": [
+        "error",
+        {
+          "replacements": {
+            "res": false,
+            "req": false,
+            "i": false,
+            "dir": false,
+            "docs": false
+          }
+        }
+      ],
+      "new-cap": [
+        "error"
+      ],
+      "guard-for-in": [
+        "off"
+      ]
+    }
   }
 }
