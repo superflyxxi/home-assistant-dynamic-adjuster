@@ -1,0 +1,6 @@
+{
+	"homeAssistant": {
+		"baseUrl": "HOME_ASSISTANT_BASEURL",
+		"token": "HOME_ASSISTANT_TOKEN"
+	}
+}
