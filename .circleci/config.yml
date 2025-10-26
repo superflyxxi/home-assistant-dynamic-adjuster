@@ -46,9 +46,9 @@ jobs:
           command: npm test -- --forbid-pending --forbid-only --reporter mocha-junit-reporter
           environment:
             MOCHA_FILE: ./mocha/test-results.xml
-      - run:
-          name: Tar coverage
-          command: tar -jvcf coverage.tar.bz2 coverage/
+      #- run:
+      #    name: Tar coverage
+      #    command: tar -jvcf coverage.tar.bz2 coverage/
       - store_test_results:
           path: ./mocha
       - store_artifacts:
