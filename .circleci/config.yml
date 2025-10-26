@@ -88,7 +88,7 @@ jobs:
             equal: [main, << pipeline.git.branch >>]
           steps:
           - setup_remote_docker:
-              docker_layer_caching: false
+              docker_layer_caching: true # enable for main as well
       - unless:
           condition:
             equal: [main, << pipeline.git.branch >>]
@@ -113,9 +113,9 @@ jobs:
           name: Custom enviroment variables
           command: |
             export CACHE_FROM_IMAGES=$(grep "^FROM " Dockerfile | sed 's/FROM //g')
-            if [[ "<< pipeline.git.branch >>" != "main" ]]; then
+            #if [[ "<< pipeline.git.branch >>" != "main" ]]; then
               export CACHE_FROM_IMAGES="${CACHE_FROM_IMAGES},${CACHE_REGISTRY}/${CACHE_USERNAME}/${CIRCLE_PROJECT_REPONAME}:latest"
-            fi
+            #fi
 
             if [[ "main" == "<< pipeline.git.branch >>" ]] && [[ "main" != "${PRIMARY_DOCKER_TAG}" ]]; then
               NOW=${PRIMARY_DOCKER_TAG:0:1}
