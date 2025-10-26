@@ -1,0 +1,5 @@
+{
+	"homeAssistant": {
+		"baseUrl": "http://localhost:8123",
+		"token": ""
+}
