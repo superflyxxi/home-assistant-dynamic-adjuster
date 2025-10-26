@@ -14,5 +14,8 @@
   "bugs": {
     "url": "https://github.com/superflyxxi/home-assistant-dynamic-adjuster/issues"
   },
-  "homepage": "https://github.com/superflyxxi/home-assistant-dynamic-adjuster#readme"
+  "homepage": "https://github.com/superflyxxi/home-assistant-dynamic-adjuster#readme",
+  "dependencies": {
+    "config": "4"
+  }
 }
