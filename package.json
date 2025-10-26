@@ -25,6 +25,8 @@
     "config": "4",
     "mocha": "11",
     "nock": "14",
+    "semantic-release": "25",
+    "@semantic-release/exec": "7",
     "xo": "1"
   },
   "xo": {
