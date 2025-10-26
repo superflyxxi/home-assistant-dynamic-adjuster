@@ -138,7 +138,7 @@ jobs:
           command: |
             for I in $(echo ${CACHE_FROM_IMAGES} | tr "," "\n"); do
               echo "Pulling $I"
-              docker pull $I
+              docker pull $I || true
             done
       - docker/build:
           step-name: Build application docker image
