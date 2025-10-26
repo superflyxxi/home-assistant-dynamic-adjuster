@@ -1,7 +1,7 @@
 FROM node:22.21.0
 WORKDIR /app
 ENTRYPOINT ["npm", "start"]
-ADD config /app/config
-ADD package* /app
+COPY config /app/config
+COPY package* /app
 RUN npm install --omit-dev
-ADD src /app/src
+COPY src /app/src
