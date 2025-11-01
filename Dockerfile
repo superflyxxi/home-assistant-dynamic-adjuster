@@ -1,4 +1,5 @@
-FROM node:22.21.0
+ARG NODE_VERSION
+FROM node:${NODE_VERSION}-alpine
 WORKDIR /app
 ENTRYPOINT ["npm", "start"]
 COPY config /app/config
